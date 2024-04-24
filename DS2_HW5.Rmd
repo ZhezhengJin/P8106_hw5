@@ -40,18 +40,18 @@ library(pROC)
 library(pdp)
 library(ISLR)
 library(caret)
-library(rpart)
-library(rpart.plot)
-library(ranger)
+library(AppliedPredictiveModeling)
 library(tidymodels)
+library(factoextra)
+library(e1071)
 ```
 
-## 1.Auto Data
+# 1.Auto Data
 ```{r}
 # Data Import
 auto <- read_csv("auto.csv") %>%
   mutate(
-    mpg_cat = as.factor(mpg_cat),
+    mpg_cat = factor(mpg_cat, levels = c("low", "high")),
     origin = factor(origin, levels = 1:3),
     cylinders = as.factor(cylinders)) 
 
@@ -59,14 +59,136 @@ skimr::skim(auto)
 contrasts(auto$mpg_cat)
 # data partition
 set.seed(2358)
-data_split2 <- initial_split(auto, prop = 0.7)
-train2 <- training(data_split2)
-test2 <- testing(data_split2)
+data_split <- initial_split(auto, prop = 0.7)
+train <- training(data_split)
+test <- testing(data_split)
 ```
 
+The "auto" dataset contains `r ncol(auto)` variables and `r nrow(auto)` observations.
 
+## a. svm (linear kernel)
+```{r}
+# use e1071
+set.seed(23)
+linear.tune <- tune.svm(mpg_cat ~ . , 
+                        data = train, 
+                        kernel = "linear", 
+                        cost = exp(seq(-5,3,len=50)),
+                        scale = TRUE)
+plot(linear.tune)
 
+linear.tune$best.parameters
 
+best.linear <- linear.tune$best.model
+summary(best.linear)
 
+# Training error
+confusionMatrix(data = linear.tune$best.model$fitted, 
+                reference = train$mpg_cat)
 
+# Test error
+pred.linear <- predict(best.linear, newdata = test)
+confusionMatrix(data = pred.linear, 
+                reference = test$mpg_cat)
+```
 
+In the training data, the support vector classifier (linear kernel) achieves an error rate of 7.3%. When applied to the test data, it achieves an error rate of 11.02%.
+
+## b. svm (radial kernel)
+```{r}
+# use e1071
+set.seed(23)
+radial.tune <- tune.svm(mpg_cat ~ . , 
+                        data = train, 
+                        kernel = "radial", 
+                        cost = exp(seq(-3,7,len=50)),
+                        gamma = exp(seq(-6,3,len=20)))
+
+plot(radial.tune, transform.y = log, transform.x = log, 
+     color.palette = terrain.colors)
+
+radial.tune$best.parameters
+
+best.radial <- radial.tune$best.model
+summary(best.radial)
+
+# Training error
+confusionMatrix(data = radial.tune$best.model$fitted, 
+                reference = train$mpg_cat)
+
+# Test error
+pred.radial <- predict(best.radial, newdata = test)
+confusionMatrix(data = pred.radial, 
+                reference = test$mpg_cat)
+```
+
+In the training data, the support vector machine with radial kernel achieves an error rate of 3.28%. When applied to the test data, it achieves an error rate of 8.47%.
+
+# 2. USArrests Data
+```{r}
+# import data
+data(USArrests)
+```
+
+## a. Hierarchical Clustering 
+```{r}
+# using Complete linkage and Euclidean distance to cluster the states
+hc.complete <- hclust(dist(USArrests), method = "complete")
+
+# Cut the dendrogram at a height that results in three distinct clusters
+fviz_dend(hc.complete, k = 3,        
+          cex = 0.4, 
+          palette = "jco", 
+          color_labels_by_k = TRUE,
+          rect = TRUE, rect_fill = TRUE, rect_border = "jco",
+          labels_track_height = 2.5)
+
+ind3.complete <- cutree(hc.complete, 3)
+
+# states belonging in clusters
+USArrests[ind3.complete == 1,0] %>% t()
+USArrests[ind3.complete == 2,0] %>% t()
+USArrests[ind3.complete == 3,0] %>% t()
+```
+
+The first cluster contains Alabama, Alaska, Arizona, California, Delaware, Florida, Illinois, Louisiana, Maryland, Michigan, Mississippi, Nevada, New Mexico, New York, North Carolina, South Carolina;
+
+The second cluster contains Arkansas, Colorado, Georgia, Massachusetts, Missouri, New Jersey, Oklahoma, Oregon, Rhode Island, Tennessee, Texas, Virginia, Washington, Wyoming;
+
+The third cluster contains Connecticut, Hawaii, Idaho, Indiana, Iowa, Kansas, Kentucky, Maine, Minnesota, Montana, Nebraska, New Hampshire, North Dakota, Ohio, Pennsylvania, South Dakota, Utah, Vermont, West Virginia, Wisconsin.
+
+## b. Hierarchical Clustering after scaling
+```{r}
+# scale data
+USArrests_scaled <- scale(USArrests, center = TRUE, scale = TRUE)
+
+# Using Complete linkage and Euclidean distance to cluster the states
+hc.complete.scaled <- hclust(dist(USArrests_scaled), method = "complete")
+
+# Cut the dendrogram at a height that results in three distinct clusters
+fviz_dend(hc.complete.scaled, k = 3,        
+          cex = 0.5, 
+          palette = "jco", 
+          color_labels_by_k = TRUE,
+          rect = TRUE, rect_fill = TRUE, rect_border = "jco",
+          labels_track_height = 2.5)
+
+ind3.complete.scaled <- cutree(hc.complete.scaled, 3)
+
+# states belonging in clusters
+USArrests_scaled[ind3.complete.scaled == 1,0] %>% t()
+USArrests_scaled[ind3.complete.scaled == 2,0] %>% t()
+USArrests_scaled[ind3.complete.scaled == 3,0] %>% t()
+```
+
+The first cluster contains Alabama, Alaska, Georgia, Louisiana, Mississippi, North Carolina, South Carolina, Tennessee;
+
+The second cluster contains Arizona, California, Colorado, Florida, Illinois, Maryland, Michigan, Nevada, New Mexico, New York, Texas;
+
+The third cluster contains Arkansas, Connecticut, Delaware, Hawaii, Idaho, Indiana, Iowa, Kansas, Kentucky, Maine, Massachusetts, Minnesota, Missouri, Montana, Nebraska, New Hampshire, New Jersey, North Dakota, Ohio, Oklahoma, Oregon, Pennsylvania, Rhode Island, South Dakota, Utah, Vermont, Virginia, Washington, West Virginia, Wisconsin, Wyoming.
+
+## c. Differences between with or without scaling
+
+Based on the results from 2a and 2b, scaling the variables changed the clustering results. This difference is attributed to how hierarchical clustering computes the distances between observations. Specifically, it uses the Euclidean distance, which is sensitive to the scales of the variables involved. When variables have different scales or units, those with larger magnitudes—such as `assault` or `urbanpop` in our case—may disproportionately influence the clustering, comparing to `murder` or `rape`. This can result in a bias where the clustering is dominated by one or two variables. Consequently, to prevent any single variable from overshadowing others and to ensure a more balanced contribution from all variables, it is advisable to scale the variables before performing distance calculations in the clustering process.
+
+In my opinion, it is usually beneficial to scale the variables before calculating the inter-observation dissimilarities in hierarchical clustering. This approach helps to minimize bias resulting from variations in variable scales, ensuring that each variable contributes equally to the clustering process. However, there are exceptions where scaling might not be necessary or could even be inappropriate, depending on the specific situation of the data.
